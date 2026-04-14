@@ -1,0 +1,16 @@
+{
+    "PRICE_FLOOR_PLN_M2": 2000.0,
+    "PRICE_CEIL_PLN_M2": 40000.0,
+    "POP_MARGIN_RULES": [
+        [0, 6000, 20.0, 10.0],
+        [6000, 20000, 15.0, 10.0],
+        [20000, 50000, 12.0, 10.0],
+        [50000, 200000, 10.0, 8.0],
+        [200000, null, 8.0, 5.0]
+    ],
+    "DELAY_MIN": 4.0,
+    "DELAY_MAX": 6.0,
+    "RETRIES": 3,
+    "SOFT_STOP_MORE": 10,
+    "BDL_API_KEY_DEFAULT": "c804c054-f519-45b3-38f3-08de375a07dc"
+}

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where python3:*)",
+      "Bash(where python:*)",
+      "Bash(\"C:\\\\Users\\\\skalk\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe\" -m pytest \"C:\\\\Users\\\\skalk\\\\PycharmProjects\\\\Price-Bot\\\\tests\\\\test_utils.py\" -v)"
+    ]
+  }
+}

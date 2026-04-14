@@ -30,7 +30,7 @@ def read_csv_pl(path: Path) -> pd.DataFrame:
         return pd.read_csv(path, sep=";", encoding="utf-8-sig", engine="python")
     except UnicodeDecodeError:
         return pd.read_csv(path, sep=";", encoding="cp1250", engine="python")
-    except Exception:
+    except (OSError, pd.errors.ParserError):
         return pd.read_csv(path, sep=";", engine="python")
 
 

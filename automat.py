@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+import logging
 from pathlib import Path
 import sys
 import pandas as pd
@@ -9,6 +10,9 @@ import tkinter as tk
 from tkinter import ttk
 from openpyxl import load_workbook
 import automat1 as a1
+from utils import setup_logging
+
+logger = logging.getLogger(__name__)
 def _pick_report_sheet_name(xlsx_path: Path, preferred: str = "raport") -> str:
     wb = load_workbook(xlsx_path)
     if preferred in wb.sheetnames:
@@ -56,7 +60,7 @@ def configure_margins_gui():
             return "∞"
         try:
             x = int(x)
-        except Exception:
+        except (ValueError, TypeError):
             return str(x)
         return f"{x:,}".replace(",", " ")
 
@@ -83,11 +87,11 @@ def configure_margins_gui():
             raw_pct = e_pct.get().strip().replace(" ", "").replace(",", ".")
             try:
                 m2_val = float(raw_m2) if raw_m2 else float(default_m2)
-            except Exception:
+            except (ValueError, TypeError):
                 m2_val = float(default_m2)
             try:
                 pct_val = float(raw_pct) if raw_pct else float(default_pct)
-            except Exception:
+            except (ValueError, TypeError):
                 pct_val = float(default_pct)
             new_rules.append((low, high, m2_val, pct_val))
         result["ok"] = True
@@ -113,24 +117,25 @@ def configure_margins_gui():
     return result["rules"] if result["ok"] else None
 
 def main(argv=None) -> int:
+    setup_logging()
 
     if argv is None:
         argv = sys.argv
 
     if len(argv) < 3:
-        print("Użycie: automat.py RAPORT_PATH BAZA_FOLDER")
+        logger.error("Uzycie: automat.py RAPORT_PATH BAZA_FOLDER")
         return 1
 
     raport_path = Path(argv[1]).resolve()
     baza_folder = Path(argv[2]).resolve()
 
     if not raport_path.exists():
-        print(f"[BŁĄD] Nie znaleziono raportu: {raport_path}")
+        logger.error("Nie znaleziono raportu: %s", raport_path)
         return 1
 
     polska_path = baza_folder / "Polska.xlsx"
     if not polska_path.exists():
-        print(f"[BŁĄD] Nie znaleziono Polska.xlsx w folderze: {baza_folder}")
+        logger.error("Nie znaleziono Polska.xlsx w folderze: %s", baza_folder)
         return 1
 
     margin_m2_default = 15.0
@@ -138,12 +143,12 @@ def main(argv=None) -> int:
 
     try:
         new_rules = configure_margins_gui()
-    except Exception as e:
-        print(f"[Automat] Błąd GUI progów ludności: {e}")
+    except (tk.TclError, RuntimeError) as e:
+        logger.error("Blad GUI progow ludnosci: %s", e)
         new_rules = a1.POP_MARGIN_RULES
 
     if new_rules is None:
-        print("[Automat] Przerwano (Anuluj w oknie progów ludności).")
+        logger.info("Przerwano (Anuluj w oknie progow ludnosci).")
         return 1
     a1.POP_MARGIN_RULES = new_rules
 
@@ -151,19 +156,19 @@ def main(argv=None) -> int:
         if len(a1.POP_MARGIN_RULES) >= 3:
             margin_m2_default = float(a1.POP_MARGIN_RULES[2][2])
             margin_pct_default = float(a1.POP_MARGIN_RULES[2][3])
-    except Exception:
-        pass
+    except (ValueError, TypeError, IndexError) as e:
+        logger.warning("Nie udalo sie odczytac progow z POP_MARGIN_RULES: %s", e)
 
     try:
         df_pl = pd.read_excel(polska_path)
     except Exception as e:
-        print(f"[BŁĄD] Nie mogę wczytać Polska.xlsx: {polska_path}\n{e}")
+        logger.error("Nie moge wczytac Polska.xlsx: %s — %s", polska_path, e)
         return 1
 
     col_area_pl = a1._find_col(df_pl.columns, ["metry", "powierzchnia", "Obszar", "obszar"])
     col_price_pl = a1._find_col(df_pl.columns, ["cena_za_metr", "cena za metr", "cena_za_m2", "cena_za_metr2", "cena za m2"])
     if not col_area_pl or not col_price_pl:
-        print("[BŁĄD] Polska.xlsx nie zawiera wymaganych kolumn metrażu / ceny.")
+        logger.error("Polska.xlsx nie zawiera wymaganych kolumn metrazu / ceny.")
         return 1
 
     # indeksy dla szybkich dopasowań (kanonizacja + mapy miejscowości)
@@ -177,7 +182,7 @@ def main(argv=None) -> int:
         else:
             df_raport = pd.read_csv(raport_path, sep=None, engine="python")
     except Exception as e:
-        print(f"[BŁĄD] Nie mogę wczytać raportu: {raport_path}\n{e}")
+        logger.error("Nie moge wczytac raportu: %s — %s", raport_path, e)
         return 1
 
 
@@ -186,16 +191,16 @@ def main(argv=None) -> int:
         if hasattr(a1, "ensure_report_columns"):
             a1.ensure_report_columns(df_raport)
     except Exception as e:
-        print(f"[Automat] Nie mogę przygotować kolumn (hits/stage): {e}")
+        logger.warning("Nie moge przygotowac kolumn (hits/stage): %s", e)
 
     local_ludnosc = a1._find_ludnosc_csv(baza_folder=baza_folder, raport_path=raport_path, polska_path=polska_path)
     api_cache = baza_folder / "population_cache.csv"
 
-    print(f"[Automat] local ludnosc.csv -> {local_ludnosc if local_ludnosc else '(NIE ZNALEZIONO)'}")
+    logger.info("local ludnosc.csv -> %s", local_ludnosc if local_ludnosc else "(NIE ZNALEZIONO)")
 
     pop_resolver = a1.PopulationResolver(local_csv=local_ludnosc, api_cache_csv=api_cache, use_api=True)
 
-    print(f"[Automat] Start – liczba wierszy w raporcie: {len(df_raport.index)}")
+    logger.info("Start — liczba wierszy w raporcie: %d", len(df_raport.index))
 
     for idx in range(len(df_raport.index)):
         try:
@@ -208,7 +213,7 @@ def main(argv=None) -> int:
                 pop_resolver=pop_resolver,
             )
         except Exception as e:
-            print(f"[Automat] Błąd przy wierszu {idx+1}: {e}")
+            logger.error("Blad przy wierszu %d: %s", idx + 1, e)
 
     try:
         # uporządkuj kolumny: Czy udziały? -> hits -> stage -> Średnia cena za m2 ( z bazy)
@@ -216,17 +221,17 @@ def main(argv=None) -> int:
             if hasattr(a1, "reorder_report_columns"):
                 df_raport = a1.reorder_report_columns(df_raport)
         except Exception as e:
-            print(f"[Automat] Nie mogę uporządkować kolumn (hits/stage): {e}")
+            logger.warning("Nie moge uporzadkowac kolumn (hits/stage): %s", e)
 
         if is_excel:
             save_report_sheet_only(raport_path, df_raport, sheet_name="raport")
         else:
             df_raport.to_csv(raport_path, index=False, encoding="utf-8-sig")
     except Exception as e:
-        print(f"[BŁĄD] Nie udało się zapisać raportu: {raport_path}\n{e}")
+        logger.error("Nie udalo sie zapisac raportu: %s — %s", raport_path, e)
         return 1
 
-    print(f"[Automat] Zakończono – zapisano zmiany w pliku: {raport_path}")
+    logger.info("Zakonczono — zapisano zmiany w pliku: %s", raport_path)
     return 0
 
 if __name__ == '__main__':

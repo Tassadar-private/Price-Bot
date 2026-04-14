@@ -120,14 +120,14 @@ def extract_next_data(html: str):
     if tag and tag.string:
         try:
             return json.loads(tag.string)
-        except Exception:
+        except (ValueError, TypeError):
             pass
     for s in soup.find_all("script", attrs={"type": "application/json"}):
         try:
             obj = json.loads(s.string or "")
             if isinstance(obj, dict) and "props" in obj and "pageProps" in obj["props"]:
                 return obj
-        except Exception:
+        except (ValueError, TypeError):
             continue
     return None
 
@@ -184,7 +184,7 @@ def _load_known_districts() -> list[str]:
             data = json.loads(dzielnice_path.read_text(encoding="utf-8"))
             if isinstance(data, list) and data:
                 return data
-        except Exception:
+        except (OSError, ValueError):
             pass
     return _KNOWN_DISTRICTS_DEFAULT
 
@@ -208,7 +208,7 @@ def detect_dzielnica(next_data, miasto, ulica):
                 if ulica and ul_name and ul_name.lower() in str(ulica).lower():
                     if maybe_dist and maybe_dist.lower() != city.lower():
                         return maybe_dist.strip()
-    except Exception:
+    except (ValueError, TypeError):
         pass
 
     # 2) specjalny case Kotuli/Projektant
@@ -385,7 +385,7 @@ def read_links_any(input_path: Path) -> list[str]:
                         break
             if links:
                 return dedupe_preserve_order(links)
-    except Exception:
+    except csv.Error:
         pass
     # wierszowe URL-e
     for ln in text.splitlines():
@@ -436,7 +436,7 @@ def count_saved_rows(out_path: Path) -> int:
             if not first:
                 return 0
             return sum(1 for _ in rd)
-    except Exception:
+    except (OSError, csv.Error):
         return 0
 
 

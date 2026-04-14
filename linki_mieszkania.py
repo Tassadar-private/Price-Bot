@@ -77,7 +77,7 @@ def mk_session() -> requests.Session:
 def soup_of(html: str) -> BeautifulSoup:
     try:
         return BeautifulSoup(html, "lxml")
-    except Exception:
+    except (ImportError, Exception):
         return BeautifulSoup(html, "html.parser")
 
 
@@ -196,17 +196,24 @@ def _read_existing_links(out_csv: Path) -> tuple[list[str], set[str]]:
     return links, seen
 
 
+import threading as _threading
+
+_file_lock = _threading.Lock()
+
+
 def _append_new_links(out_csv: Path, new_links: list[str]) -> None:
-    """Dopisuje linki do CSV (1 kolumna), dodając nagłówek jeśli plik pusty/nie istnieje."""
+    """Dopisuje linki do CSV (1 kolumna), dodając nagłówek jeśli plik pusty/nie istnieje.
+    Używa blokady wątkowej, żeby uniknąć równoczesnego zapisu z wielu regionów."""
     if not new_links:
         return
-    out_csv.parent.mkdir(parents=True, exist_ok=True)
-    write_header = (not out_csv.exists()) or (out_csv.stat().st_size == 0)
-    with out_csv.open("a", encoding="utf-8-sig", newline="") as f:
-        if write_header:
-            f.write("link\n")
-        for u in new_links:
-            f.write(u + "\n")
+    with _file_lock:
+        out_csv.parent.mkdir(parents=True, exist_ok=True)
+        write_header = (not out_csv.exists()) or (out_csv.stat().st_size == 0)
+        with out_csv.open("a", encoding="utf-8-sig", newline="") as f:
+            if write_header:
+                f.write("link\n")
+            for u in new_links:
+                f.write(u + "\n")
 
 
 def _load_state(state_path: Path) -> dict:
@@ -215,7 +222,7 @@ def _load_state(state_path: Path) -> dict:
     try:
         import json
         return json.loads(state_path.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         return {}
 
 
@@ -226,12 +233,12 @@ def _save_state(state_path: Path, data: dict) -> None:
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         import os
         os.replace(str(tmp), str(state_path))
-    except Exception:
+    except OSError:
         # fallback: bezpośredni zapis
         try:
             import json as _json
             state_path.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception:
+        except OSError:
             pass
 
 
@@ -348,23 +355,23 @@ def main():
     # Koniec: linki kompletne
     try:
         done_path.write_text(datetime.now().isoformat(), encoding="utf-8")
-    except Exception:
+    except OSError:
         # fallback: "touch"
         try:
             done_path.touch(exist_ok=True)
-        except Exception:
+        except OSError:
             pass
 
     # sprzątanie stanu/stop
     try:
         if state_path.exists():
             state_path.unlink()
-    except Exception:
+    except OSError:
         pass
     try:
         if stop_path.exists():
             stop_path.unlink()
-    except Exception:
+    except OSError:
         pass
 
     LOG(f"[done] zapisano: {out_csv} (unikalnych linków: {len(existing_set)}) marker={done_path}")

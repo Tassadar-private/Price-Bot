@@ -18,15 +18,19 @@ import unicodedata
 import re
 
 # ===== konfiguracja =====
+from utils import load_config as _load_config
+
+_cfg = _load_config()
+
 VOIVODESHIPS = [
     "Dolnośląskie","Kujawsko-Pomorskie","Lubelskie","Lubuskie","Łódzkie","Małopolskie",
     "Mazowieckie","Opolskie","Podkarpackie","Podlaskie","Pomorskie","Śląskie",
     "Świętokrzyskie","Warmińsko-Mazurskie","Wielkopolskie","Zachodniopomorskie",
 ]
-DELAY_MIN = 4.0
-DELAY_MAX = 6.0
-RETRIES   = 3
-SOFT_STOP_MORE = 10   # ile ogłoszeń „dokończyć” po kliknięciu Zatrzymaj
+DELAY_MIN = _cfg.get("DELAY_MIN", 4.0)
+DELAY_MAX = _cfg.get("DELAY_MAX", 6.0)
+RETRIES   = _cfg.get("RETRIES", 3)
+SOFT_STOP_MORE = _cfg.get("SOFT_STOP_MORE", 10)   # ile ogłoszeń „dokończyć" po kliknięciu Zatrzymaj
 
 IS_FROZEN = getattr(sys, "frozen", False)
 
@@ -66,7 +70,7 @@ def _raise_in_thread(thread: threading.Thread, exctype=SystemExit) -> bool:
 
 class BazaDanychWindow(tk.Toplevel):
     """
-    Okno „Baza danych” (uruchamiane z selektor_csv.py lub standalone).
+    Okno „Baza danych" (uruchamiane z selektor_csv.py lub standalone).
     """
     def __init__(self, parent: tk.Misc | None, base_dir: Path, standalone: bool = False):
         master = parent if parent is not None else (tk.Tk() if standalone else tk.Tk())
@@ -217,7 +221,7 @@ class BazaDanychWindow(tk.Toplevel):
             with f.open("r", encoding="utf-8-sig", newline="") as fh:
                 # 1 kolumna, nagłówek 'link'
                 return max(0, sum(1 for _ in fh) - 1)
-        except Exception:
+        except OSError:
             return 0
 
     def _read_processed_count(self, f: Path) -> int:
@@ -235,7 +239,7 @@ class BazaDanychWindow(tk.Toplevel):
                     if row and any(c.strip() for c in row):
                         n += 1
                 return n
-        except Exception:
+        except OSError:
             return 0
 
     def _load_timing(self) -> dict[str, dict]:
@@ -262,7 +266,7 @@ class BazaDanychWindow(tk.Toplevel):
                         rd = csv.DictReader(f)
                         for r in rd:
                             rows[r.get("region","")] = r
-                except Exception:
+                except OSError:
                     pass
             rows[region] = {
                 "region": region,
@@ -292,7 +296,7 @@ class BazaDanychWindow(tk.Toplevel):
                         w.writeheader()
                         for _, r in rows.items():
                             w.writerow(r)
-                except Exception:
+                except OSError:
                     pass
 
     # ---------- wybór ----------
@@ -366,9 +370,9 @@ class BazaDanychWindow(tk.Toplevel):
                 for iid in prev_sel:
                     if self.tree.exists(iid):
                         self.tree.selection_set(iid); self.tree.focus(iid); self.tree.see(iid); break
-        except Exception: pass
+        except tk.TclError: pass
         try: self.tree.yview_moveto(prev_yview[0])
-        except Exception: pass
+        except tk.TclError: pass
 
     def _safe_refresh(self):
         self._suspend_select_events = True
@@ -395,14 +399,14 @@ class BazaDanychWindow(tk.Toplevel):
         # przy starcie reset stop na SZARY
         try:
             self.btn_stop.config(bg="#d9d9d9", activebackground="#d0d0d0")
-        except Exception:
+        except tk.TclError:
             pass
 
         # jeśli ktoś skasował CSV, ale został .done → posprzątaj
         if total == 0 and done_marker.exists():
             try:
                 done_marker.unlink()
-            except Exception:
+            except OSError:
                 pass
 
         # LINKI są "gotowe" dopiero gdy istnieje marker .done
@@ -414,7 +418,7 @@ class BazaDanychWindow(tk.Toplevel):
             try:
                 if stop_marker.exists():
                     stop_marker.unlink()
-            except Exception:
+            except OSError:
                 pass
 
             self._save_timing_row(region, "links", "W trakcie", done, total)
@@ -456,14 +460,13 @@ class BazaDanychWindow(tk.Toplevel):
                 try:
                     stop_marker.parent.mkdir(parents=True, exist_ok=True)
                     stop_marker.write_text(datetime.now().isoformat(), encoding="utf-8")
-                except Exception:
-                    # nawet jeśli nie uda się zapisać, nie wywalaj GUI
+                except OSError:
                     pass
 
                 # ŻÓŁTY = stop w toku
                 try:
                     self.btn_stop.config(bg="#f7e26b", activebackground="#f5d742")
-                except Exception:
+                except tk.TclError:
                     pass
 
                 messagebox.showinfo(
@@ -478,7 +481,7 @@ class BazaDanychWindow(tk.Toplevel):
             # 2) ADS: miękki stop (dokończ jeszcze kilka ogłoszeń)
             try:
                 self.btn_stop.config(bg="#f7e26b", activebackground="#f5d742")
-            except Exception:
+            except tk.TclError:
                 pass
             messagebox.showinfo(
                 "Zatrzymanie",
@@ -507,7 +510,7 @@ class BazaDanychWindow(tk.Toplevel):
         self._update_start_button_state()
         try:
             self.btn_stop.config(bg="#d9d9d9", activebackground="#d0d0d0")
-        except Exception:
+        except tk.TclError:
             pass
 
 
@@ -667,7 +670,7 @@ class BazaDanychWindow(tk.Toplevel):
                             time.sleep(0.6)
                             if pr.poll() is None:
                                 pr.kill()
-                        except Exception:
+                        except OSError:
                             pass
                         break
 
@@ -692,7 +695,7 @@ class BazaDanychWindow(tk.Toplevel):
                 # ZIELONY = zakończono miękki stop
                 try:
                     self.btn_stop.config(bg="#8ef98e", activebackground="#76e476")
-                except Exception:
+                except tk.TclError:
                     pass
 
         t = threading.Thread(target=monitor, daemon=True)
@@ -796,18 +799,18 @@ class BazaDanychWindow(tk.Toplevel):
         # ŻÓŁTY = scalanie w toku
         try:
             self.btn_scal.config(bg="#f7e26b", activebackground="#f5d742")
-        except Exception:
+        except tk.TclError:
             pass
 
         def worker():
             # import scalanie
             try:
                 import scalanie as _scal
-            except Exception as e:
+            except ImportError as e:
                 def on_import_err():
                     try:
                         self.btn_scal.config(bg="#f28b82", activebackground="#ea4335")
-                    except Exception:
+                    except tk.TclError:
                         pass
                     messagebox.showerror("Scalanie", f"Nie można zaimportować scalanie.py:\n{e}")
                 self.after(0, on_import_err)
@@ -819,7 +822,7 @@ class BazaDanychWindow(tk.Toplevel):
                 def on_no_woj():
                     try:
                         self.btn_scal.config(bg="#f28b82", activebackground="#ea4335")
-                    except Exception:
+                    except tk.TclError:
                         pass
                     messagebox.showerror(
                         "Scalanie",
@@ -837,7 +840,7 @@ class BazaDanychWindow(tk.Toplevel):
                     def on_sys_exit():
                         try:
                             self.btn_scal.config(bg="#f28b82", activebackground="#ea4335")
-                        except Exception:
+                        except tk.TclError:
                             pass
                         messagebox.showerror(
                             "Scalanie",
@@ -850,7 +853,7 @@ class BazaDanychWindow(tk.Toplevel):
                 def on_err(err=err):
                     try:
                         self.btn_scal.config(bg="#f28b82", activebackground="#ea4335")
-                    except Exception:
+                    except tk.TclError:
                         pass
                     messagebox.showerror("Scalanie", f"Błąd scalania:\n{err}")
 
@@ -861,7 +864,7 @@ class BazaDanychWindow(tk.Toplevel):
             def on_done():
                 try:
                     self.btn_scal.config(bg="#8ef98e", activebackground="#76e476")
-                except Exception:
+                except tk.TclError:
                     pass
                 msg = "Zakończono scalanie do Polska.xlsx."
                 if not xlsx_path.exists():
@@ -885,7 +888,7 @@ class BazaDanychWindow(tk.Toplevel):
 
 def open_ui(root_dir: Path | str, parent: tk.Misc | None = None):
     """
-    Otwiera okno „Baza danych”.
+    Otwiera okno „Baza danych".
     """
     base = Path(root_dir).resolve()
     if parent is not None:

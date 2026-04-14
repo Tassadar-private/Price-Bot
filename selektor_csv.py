@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from pathlib import Path
+import logging
 import os
-import unicodedata
+import subprocess
+import sys
+import threading  # <-- do wątku dla Automatu / Czyszczenia
+from pathlib import Path
 
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -12,12 +15,19 @@ import tkinter.ttk as ttk
 import pandas as pd
 import numpy as np
 import manual
-import subprocess
-import sys
-import threading  # <-- do wątku dla Automatu / Czyszczenia
 
 from openpyxl import load_workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
+
+from utils import (
+    norm as _norm,
+    find_col as _find_col,
+    trim_after_semicolon as _trim_after_semicolon,
+    to_float_maybe as _to_float_maybe,
+    setup_logging,
+)
+
+logger = logging.getLogger(__name__)
 
 APP_TITLE = "PriceBot"
 
@@ -26,68 +36,14 @@ RAPORT_SHEET = "raport"
 RAPORT_ODF = "raport_odfiltrowane"
 
 
-# ---------- Helpers nazewnicze ----------
-
-def _norm(s: str) -> str:
-    return (s or "").strip().lower().replace(" ", "").replace("\xa0", "").replace("\t", "")
-
-
-def _plain(s: str) -> str:
-    s = (s or "").lower()
-    s = "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
-    return s
-
-
-def _find_col(cols, candidates):
-    """Zwróć istniejącą kolumnę dopasowaną do listy kandydatów (po normalizacji / zawieraniu)."""
-    norm_map = {_norm(c): c for c in cols}
-    # dokładne
-    for cand in candidates:
-        key = _norm(cand)
-        if key in norm_map:
-            return norm_map[key]
-    # "zawiera"
-    for c in cols:
-        if any(_norm(x) in _norm(c) for x in candidates):
-            return c
-    return None
-
-
-def _trim_after_semicolon(val):
-    if pd.isna(val):
-        return ""
-    s = str(val)
-    if ";" in s:
-        s = s.split(";", 1)[0].strip()
-    return s
-
-
-def _to_float_maybe(x):
-    """Parsuje liczby typu '101,62 m²', '52 m2', '11 999 zł/m²' itd."""
-    if pd.isna(x):
-        return None
-    s = str(x)
-
-    # usuń jednostki
-    for unit in ["m²", "m2", "zł/m²", "zł/m2", "zł"]:
-        s = s.replace(unit, "")
-
-    s = s.replace(" ", "").replace("\xa0", "")
-    s = s.replace(",", ".")
-    s = "".join(ch for ch in s if (ch.isdigit() or ch == "." or ch == "-"))
-    try:
-        return float(s) if s else None
-    except Exception:
-        return None
-
-
 # ---------- Excel: czytaj/zapisuj TYLKO arkusz "raport" (bez kasowania innych) ----------
 
 def _xlsx_has_sheet(path: Path, sheet_name: str) -> bool:
     try:
         wb = load_workbook(path, read_only=True, keep_vba=(path.suffix.lower() == ".xlsm"))
         return sheet_name in wb.sheetnames
-    except Exception:
+    except OSError as e:
+        logger.warning("Nie udalo sie otworzyc pliku %s: %s", path, e)
         return False
 
 
@@ -170,8 +126,8 @@ def _write_df_to_sheet_preserve(path: Path, df: pd.DataFrame, sheet_name: str = 
     # dopilnuj raport_odfiltrowane
     try:
         ensure_raport_odfiltrowane(path)
-    except Exception:
-        pass
+    except OSError as e:
+        logger.warning("Nie udalo sie zapewnic arkusza raport_odfiltrowane: %s", e)
 
 
 # ---------- USTAWIENIA PODGLĄDU ----------
@@ -373,7 +329,8 @@ class App(tk.Tk):
                     )
                     messagebox.showinfo("Uruchomiono", f"Start: {script.name}")
                     return
-                except Exception as e:
+                except OSError as e:
+                    logger.error("Nie udalo sie uruchomic skryptu %s: %s", script.name, e)
                     messagebox.showerror("Błąd uruchamiania", f"Nie udało się uruchomić {script.name}:\n{e}")
                     return
         messagebox.showerror("Brak pliku", f"Nie znaleziono żadnego ze skryptów: {', '.join(candidates)}")
@@ -399,16 +356,14 @@ class App(tk.Tk):
     def load_dataframe(self, path: Path):
         try:
             if path.suffix.lower() in (".xlsx", ".xlsm"):
-                # ⛔ Podgląd ma być TYLKO arkusza 'raport'
                 self.df = _read_report_excel(path, sheet_name=RAPORT_SHEET)
 
                 self.update_rows_count()
 
-                # ✅ dopilnuj arkusza raport_odfiltrowane (techniczne)
                 try:
                     ensure_raport_odfiltrowane(path)
-                except Exception:
-                    pass
+                except OSError as e:
+                    logger.warning("Nie udalo sie zapewnic arkusza raport_odfiltrowane: %s", e)
             else:
                 # CSV nie ma arkuszy — podgląd OK
                 self.df = pd.read_csv(path, sep=None, engine="python")
@@ -416,6 +371,7 @@ class App(tk.Tk):
             self.rebuild_kw_index()
             self.update_rows_count()
         except Exception as e:
+            logger.error("Blad odczytu pliku %s: %s", path, e)
             messagebox.showerror(
                 "Błąd odczytu",
                 f"Nie mogę wczytać arkusza '{RAPORT_SHEET}' z pliku:{path}{e}"
@@ -477,7 +433,7 @@ class App(tk.Tk):
 
         try:
             self.clean_btn.config(bg="#f7e26b", activebackground="#f5d742")
-        except Exception:
+        except tk.TclError:
             pass
 
         def worker():
@@ -498,15 +454,33 @@ class App(tk.Tk):
                     close_fds=(os.name != "nt"),
                     creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
                 )
-                out, err = proc.communicate()
+                out, err = proc.communicate(timeout=600)
                 rc = proc.returncode
-            except Exception as e:
+            except subprocess.TimeoutExpired:
+                logger.error("Czyszczenie pliku przekroczylo limit czasu (600s): %s", script_path.name)
+                proc.kill()
+                proc.communicate()
+
+                def on_timeout():
+                    try:
+                        self.clean_btn.config(bg="#f28b82", activebackground="#ea4335")
+                    except tk.TclError:
+                        pass
+                    messagebox.showerror(
+                        "Czyszczenie",
+                        f"Skrypt {script_path.name} przekroczyl limit czasu (600s) i zostal zatrzymany.",
+                    )
+
+                self.after(0, on_timeout)
+                return
+            except OSError as e:
+                logger.error("Nie udalo sie uruchomic skryptu czyszczenia %s: %s", script_path.name, e)
                 err_msg = str(e)
 
                 def on_error(msg=err_msg):
                     try:
                         self.clean_btn.config(bg="#f28b82", activebackground="#ea4335")
-                    except Exception:
+                    except tk.TclError:
                         pass
                     messagebox.showerror("Czyszczenie", f"Nie udało się uruchomić {script_path.name}:\n{msg}")
 
@@ -517,7 +491,7 @@ class App(tk.Tk):
                 if rc == 0:
                     try:
                         self.clean_btn.config(bg="#8ef98e", activebackground="#76e476")
-                    except Exception:
+                    except tk.TclError:
                         pass
                     msg = f"Zakończono działanie {script_path.name}.\nPrzetworzony plik:\n{in_path}"
                     log = (out or "").strip()
@@ -527,7 +501,7 @@ class App(tk.Tk):
                 else:
                     try:
                         self.clean_btn.config(bg="#f28b82", activebackground="#ea4335")
-                    except Exception:
+                    except tk.TclError:
                         pass
                     log = ((err or "") + "\n" + (out or "")).strip() or "(brak tekstu błędu na stdout/stderr)"
                     if len(log) > 1500:
@@ -548,12 +522,12 @@ class App(tk.Tk):
         for p in ["linki", "województwa", "logs"]:
             (base / p).mkdir(parents=True, exist_ok=True)
 
-        # ✅ dopilnuj raport_odfiltrowane zawsze
+        # dopilnuj raport_odfiltrowane zawsze
         if self.input_path and self.input_path.suffix.lower() in (".xlsx", ".xlsm"):
             try:
                 ensure_raport_odfiltrowane(self.input_path)
-            except Exception:
-                pass
+            except OSError as e:
+                logger.warning("Nie udalo sie zapewnic arkusza raport_odfiltrowane: %s", e)
 
         if self.input_file_var.get().strip():
             self.add_value_columns_to_input()
@@ -568,7 +542,7 @@ class App(tk.Tk):
         if d:
             self.output_folder_var.set(d)
 
-    # ✅ POPRAWIONE: dodaje kolumny przez openpyxl do arkusza 'raport' bez kasowania innych arkuszy
+    # Dodaje kolumny przez openpyxl do arkusza 'raport' bez kasowania innych arkuszy
     def add_value_columns_to_input(self):
         """
         Dodaje 3 kolumny wartości do arkusza 'raport' w pliku raportowym,
@@ -623,8 +597,8 @@ class App(tk.Tk):
                 wb.save(path)
                 try:
                     ensure_raport_odfiltrowane(path)
-                except Exception:
-                    pass
+                except OSError as e:
+                    logger.warning("Nie udalo sie zapewnic arkusza raport_odfiltrowane: %s", e)
                 messagebox.showinfo("Kolumny", "Kolumny wartości już istnieją w arkuszu 'raport'.")
                 return
 
@@ -637,8 +611,8 @@ class App(tk.Tk):
             # dopilnuj odfiltrowane
             try:
                 ensure_raport_odfiltrowane(path)
-            except Exception:
-                pass
+            except OSError as e:
+                logger.warning("Nie udalo sie zapewnic arkusza raport_odfiltrowane: %s", e)
 
         except PermissionError:
             messagebox.showerror(
@@ -648,6 +622,7 @@ class App(tk.Tk):
             )
             return
         except Exception as e:
+            logger.error("Nie udalo sie dodac kolumn do pliku %s: %s", path, e)
             messagebox.showerror("Kolumny", f"Nie udało się dodać kolumn:\n{e}")
             return
 
@@ -664,7 +639,8 @@ class App(tk.Tk):
             return
         try:
             from bazadanych import open_ui
-        except Exception as e:
+        except ImportError as e:
+            logger.error("Nie mozna zaimportowac bazadanych.py: %s", e)
             messagebox.showerror("Baza danych", f"Nie mogę zaimportować bazadanych.py:\n{e}")
             return
         open_ui(root_dir, parent=self)
@@ -684,16 +660,17 @@ class App(tk.Tk):
 
         try:
             self.automat_btn.config(bg="#f7e26b", activebackground="#f5d742")
-        except Exception:
+        except tk.TclError:
             pass
 
         try:
             import automat
-        except Exception as e:
+        except ImportError as e:
             try:
                 self.automat_btn.config(bg="", activebackground="")
-            except Exception:
+            except tk.TclError:
                 pass
+            logger.error("Nie mozna zaimportowac automat.py: %s", e)
             messagebox.showerror("Automat", f"Nie mogę zaimportować automat.py:\n{e}")
             return
 
@@ -701,12 +678,13 @@ class App(tk.Tk):
             try:
                 rc = automat.main(["automat.py", raport, baza])
             except Exception as e:
+                logger.error("Blad dzialania automat.py: %s", e)
                 err_msg = str(e)
 
                 def on_error(msg=err_msg):
                     try:
                         self.automat_btn.config(bg="", activebackground="")
-                    except Exception:
+                    except tk.TclError:
                         pass
                     messagebox.showerror("Automat", f"Błąd działania automat.py:\n{msg}")
 
@@ -717,7 +695,7 @@ class App(tk.Tk):
                 if rc == 0:
                     try:
                         self.automat_btn.config(bg="#8ef98e", activebackground="#76e476")
-                    except Exception:
+                    except tk.TclError:
                         pass
                     messagebox.showinfo(
                         "Automat",
@@ -726,7 +704,7 @@ class App(tk.Tk):
                 else:
                     try:
                         self.automat_btn.config(bg="#f28b82", activebackground="#ea4335")
-                    except Exception:
+                    except tk.TclError:
                         pass
                     messagebox.showerror("Automat", "automat.py zakończył się błędem (kod != 0). Sprawdź logi.")
 
@@ -872,16 +850,18 @@ class App(tk.Tk):
             messagebox.showerror("Błąd", str(e))
             return
         except Exception as e:
+            logger.error("Nie udalo sie przeliczyc wiersza %s: %s", self.current_idx, e)
             messagebox.showerror("Błąd", f"Nie udało się przeliczyć wiersza:\n{e}")
             return
 
-        # ✅ Zapis raportu: XLSX tylko arkusz 'raport' (bez kasowania innych arkuszy)
+        # Zapis raportu: XLSX tylko arkusz 'raport' (bez kasowania innych arkuszy)
         try:
             if self.input_path and self.input_path.suffix.lower() in (".xlsx", ".xlsm"):
                 _write_df_to_sheet_preserve(self.input_path, self.df, sheet_name=RAPORT_SHEET)
             elif self.input_path and self.input_path.suffix.lower() == ".csv":
                 self.df.to_csv(self.input_path, index=False, encoding="utf-8-sig")
         except Exception as e:
+            logger.warning("Nie udalo sie zapisac raportu %s: %s", self.input_path, e)
             messagebox.showwarning(
                 "Zapis raportu",
                 f"Wyliczono wartości, ale nie udało się zapisać raportu:\n{self.input_path}\n\n{e}",
@@ -902,7 +882,7 @@ class App(tk.Tk):
             if pct is None:
                 try:
                     pct = float(self.margin_pct_var.get() or 0.0)
-                except Exception:
+                except (ValueError, TypeError):
                     pct = 0.0
             msg.append(
                 f"Średnia po obniżce ({pct:.1f}%): " + f"{res['corrected']:,.2f}".replace(",", " ").replace(".", ","))
@@ -915,6 +895,7 @@ class App(tk.Tk):
 
 
 def main():
+    setup_logging()
     app = App()
     app.mainloop()
 

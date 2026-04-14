@@ -38,7 +38,7 @@ def _load_or_first(xlsx: Path) -> str:
 def _ensure_odf(xlsx: Path, header_cols: list[str]):
     try:
         pd.read_excel(xlsx, sheet_name=SHEET_ODF, engine="openpyxl")
-    except Exception:
+    except (KeyError, ValueError):
         df0 = pd.DataFrame(columns=header_cols)
         with pd.ExcelWriter(xlsx, engine="openpyxl", mode="a", if_sheet_exists="replace") as wr:
             df0.to_excel(wr, sheet_name=SHEET_ODF, index=False)
@@ -69,7 +69,7 @@ def main():
     _ensure_odf(xlsx, list(df.columns))
     try:
         df_odf = pd.read_excel(xlsx, sheet_name=SHEET_ODF, engine="openpyxl")
-    except Exception:
+    except (KeyError, ValueError):
         df_odf = pd.DataFrame(columns=df.columns)
 
     to_move = to_move.reindex(columns=df_odf.columns, fill_value="")

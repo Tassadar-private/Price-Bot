@@ -36,6 +36,7 @@ def run_step(cmd: list[str], step_name: str) -> None:
         stdout=sys.stdout,
         stderr=sys.stderr,
         text=True,
+        timeout=600,
     )
 
     if result.returncode != 0:

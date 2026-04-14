@@ -345,7 +345,7 @@ def write_df_to_sheet(ws, df, title):
         try:
             max_len = max(len(str(col)),
                          df[col].dropna().astype(str).str.len().max() if len(df) > 0 else 0)
-        except Exception:
+        except (ValueError, TypeError):
             max_len = len(str(col))
         ws.column_dimensions[get_column_letter(ci)].width = min(max_len + 3, 45)
 
